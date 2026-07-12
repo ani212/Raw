@@ -37,6 +37,51 @@ async function startServer() {
     });
   });
 
+  // Helper to fetch public LinkedIn profile data to supplement resume roasts
+  async function fetchLinkedInProfile(url: string): Promise<string> {
+    if (!url) return "";
+    try {
+      let targetUrl = url.trim();
+      if (!targetUrl.startsWith("http://") && !targetUrl.startsWith("https://")) {
+        targetUrl = "https://" + targetUrl;
+      }
+      
+      // Make a real HTTP request to the live LinkedIn URL
+      const response = await fetch(targetUrl, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+          "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+          "Accept-Language": "en-US,en;q=0.5",
+          "Cache-Control": "no-cache",
+          "Pragma": "no-cache",
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP status code ${response.status}`);
+      }
+
+      const html = await response.text();
+      
+      // If we encounter a login gateway or standard security gate, report the fallback safely
+      if (html.includes("authwall") || html.includes("login") || html.includes("Sign In") || html.includes("challenge")) {
+        // Extract the username/profile ID if possible to give Gemini some semantic context
+        const profileIdMatch = targetUrl.match(/\/in\/([a-zA-Z0-9-_%]+)/);
+        const profileId = profileIdMatch ? profileIdMatch[1] : "candidate";
+        return `[LINKEDIN_FETCH_LIMITATION]: Profile page reached, but LinkedIn directed the request to a security gateway or login wall. Candidate public handle ID extracted: "${profileId}". Use this handle structure to analyze general industry context if supplemental footprint matches.`;
+      }
+
+      // Return a clean slice of the page text / HTML structure (up to 40000 chars) to stay safely within token and payload sizes
+      return html.substring(0, 40000);
+    } catch (err: any) {
+      console.warn("LinkedIn Fetch Warning:", err.message);
+      // Fallback gracefully instead of crashing, giving Gemini whatever username context can be parsed from the raw URL
+      const profileIdMatch = url.match(/\/in\/([a-zA-Z0-9-_%]+)/);
+      const profileId = profileIdMatch ? profileIdMatch[1] : "candidate";
+      return `[LINKEDIN_FETCH_ERROR]: Direct HTTP pull failed because of security walls or offline state: ${err.message}. Candidate public handle: "${profileId}".`;
+    }
+  }
+
   // 2. Main resume roasting API endpoint
   app.post("/api/roast", async (req, res) => {
     try {
@@ -46,16 +91,41 @@ async function startServer() {
         });
       }
 
-      const { fileName, fileType, fileData, rawText } = req.body;
+      const { fileName, fileType, fileData, rawText, linkedinUrl } = req.body;
       let resumeContentPart: any = null;
 
+      // Fetch supplemental public LinkedIn profile history if provided
+      let linkedinContext = "";
+      if (linkedinUrl && linkedinUrl.trim()) {
+        console.log(`[LinkedIn Integration] Fetching supplemental history for url: ${linkedinUrl}`);
+        linkedinContext = await fetchLinkedInProfile(linkedinUrl);
+      }
+
       // Extract text or build Gemini inlineData depending on the upload format
+      const isImage = ["png", "jpg", "jpeg", "webp", "gif"].includes(fileType?.toLowerCase());
+
       if (fileType === "pdf" && fileData) {
         // PDF is natively read by Gemini 3.5-flash! 
         // We supply the base64 pdf data directly as inlineData
         resumeContentPart = {
           inlineData: {
             mimeType: "application/pdf",
+            data: fileData,
+          },
+        };
+      } else if (isImage && fileData) {
+        // Image is natively read and OCR-ed by Gemini 3.5-flash!
+        let mimeType = "image/png";
+        if (fileType === "jpg" || fileType === "jpeg") {
+          mimeType = "image/jpeg";
+        } else if (fileType === "webp") {
+          mimeType = "image/webp";
+        } else if (fileType === "gif") {
+          mimeType = "image/gif";
+        }
+        resumeContentPart = {
+          inlineData: {
+            mimeType,
             data: fileData,
           },
         };
@@ -98,6 +168,7 @@ Your Personality:
   - Good: "This resume is trying to sell a Ferrari while showing me a bicycle."
 
 You must execute the following 12-STEP review process based on the attached resume. Return the results strictly conforming to the requested JSON schema.
+If the resume is provided as an image, first use Gemini's built-in vision and OCR capabilities to thoroughly scan, read, and extract all text, roles, metrics, dates, and sections from the image, and then use that extracted information to perform the complete 12-step autopsy and rewrite.
 
 STEP 1 — The 7-Second Recruiter Test
 Pretend you're a recruiter with 500 resumes waiting. You have exactly 7 seconds. 
@@ -146,12 +217,17 @@ End with a legendary summarizing one-liner roast (e.g., "This resume isn't under
 DO NOT invent experience, achievements, or metrics. Be completely truthful to the candidate's background while maximizing the impact of their presentation.
 `;
 
+      const contents: any[] = [resumeContentPart];
+      if (linkedinContext) {
+        contents.push({
+          text: `[SUPPLEMENTAL PUBLIC LINKEDIN PROFILE DATA]\nUrl: ${linkedinUrl}\nFetched Content:\n${linkedinContext}\n\nPlease cross-reference, match, and supplement any missing details, projects, keywords, or roles from this LinkedIn data to make the roast and 5-star rewrite extremely accurate and complete.`
+        });
+      }
+      contents.push({ text: gordonPrompt });
+
       const response = await ai.models.generateContent({
         model: "gemini-3.5-flash",
-        contents: [
-          resumeContentPart,
-          { text: gordonPrompt }
-        ],
+        contents,
         config: {
           responseMimeType: "application/json",
           responseSchema: {

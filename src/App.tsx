@@ -21,9 +21,13 @@ import {
   Users, 
   Target, 
   Award,
-  BookOpen
+  BookOpen,
+  Download,
+  FileDown,
+  Link
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
+import { exportResumeToPDF } from "./utils/pdfGenerator";
 
 // Mock Sample "Unseasoned" Resume for easy testing
 const SAMPLE_RESUME = `Alex Mercer
@@ -77,6 +81,7 @@ export default function App() {
   const [fileType, setFileType] = useState<"pdf" | "docx" | "txt" | "paste">("paste");
   const [rawText, setRawText] = useState("");
   const [isDragging, setIsDragging] = useState(false);
+  const [linkedinUrl, setLinkedinUrl] = useState("");
   
   const [loading, setLoading] = useState(false);
   const [loadingStep, setLoadingStep] = useState(0);
@@ -86,6 +91,87 @@ export default function App() {
   const [roastData, setRoastData] = useState<any>(null);
   const [activeTab, setActiveTab] = useState<"roast" | "autopsy" | "rewrite" | "verdict">("roast");
   const [copiedStates, setCopiedStates] = useState<{ [key: string]: boolean }>({});
+
+  // PDF Export States
+  const [showPdfConfig, setShowPdfConfig] = useState(false);
+  const [pdfContact, setPdfContact] = useState({
+    name: "",
+    title: "",
+    email: "",
+    phone: "",
+    location: "",
+    linkedin: "",
+    github: "",
+    summary: "",
+    skills: "",
+    experienceBullets: "",
+    education: "",
+    certifications: "",
+  });
+
+  // Automatically extract contact details and map overhaul sections when roastData changes
+  useEffect(() => {
+    if (roastData) {
+      const textToParse = rawText || SAMPLE_RESUME;
+      const lines = textToParse.split("\n").map(l => l.trim()).filter(Boolean);
+      
+      // Guess candidate name (first line is usually name)
+      const guessedName = lines[0] && lines[0].length < 40 && !lines[0].includes("@") && !lines[0].includes("|")
+        ? lines[0]
+        : "Alex Mercer";
+
+      // Email extraction
+      const emailMatch = textToParse.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
+      const guessedEmail = emailMatch ? emailMatch[0] : "alex.mercer@email.com";
+
+      // Phone extraction
+      const phoneMatch = textToParse.match(/(\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/);
+      const guessedPhone = phoneMatch ? phoneMatch[0] : "(555) 019-2834";
+
+      // Job Title from step10_rewrite or step3_autopsy header
+      const titleRecommendations = roastData.step10_rewrite?.overallTitleRecommendations || "";
+      const firstTitle = titleRecommendations.split("\n")
+        .map(t => t.replace(/^[-\s*•\d.]+\s*/, "").trim())
+        .filter(Boolean)[0] || "Senior Software Engineer";
+
+      // Skills mapping
+      const mappedSkills = roastData.step10_rewrite?.skillsReplacement || 
+                           (roastData.step3_autopsy?.skills?.valuable || []).concat(roastData.step3_autopsy?.skills?.good || []).join(", ");
+
+      // Education mapping from rawText
+      let extractedEdu = "";
+      const eduIndex = lines.findIndex(l => l.toUpperCase().includes("EDUCATION"));
+      if (eduIndex !== -1 && lines[eduIndex + 1]) {
+        extractedEdu = lines.slice(eduIndex + 1, eduIndex + 3).join("\n");
+      } else {
+        extractedEdu = "Bachelor of Science in Computer Science | State University";
+      }
+
+      // Certifications mapping from rawText
+      let extractedCerts = "";
+      const certIndex = lines.findIndex(l => l.toUpperCase().includes("CERTIFICATION"));
+      if (certIndex !== -1 && lines[certIndex + 1]) {
+        extractedCerts = lines.slice(certIndex + 1, certIndex + 3).join("\n");
+      } else {
+        extractedCerts = "Certified Kubernetes Administrator (CKA)";
+      }
+
+      setPdfContact({
+        name: guessedName,
+        title: firstTitle,
+        email: guessedEmail,
+        phone: guessedPhone,
+        location: "San Francisco, CA",
+        linkedin: "linkedin.com/in/alexmercer",
+        github: "github.com/alexmercer",
+        summary: roastData.step10_rewrite?.summary || "",
+        skills: mappedSkills,
+        experienceBullets: roastData.step10_rewrite?.experienceBulletsRewritten || "",
+        education: extractedEdu,
+        certifications: extractedCerts
+      });
+    }
+  }, [roastData, rawText]);
 
   // Auto-advance loading text steps
   useEffect(() => {
@@ -127,13 +213,15 @@ export default function App() {
   };
 
   const processFile = (uploadedFile: File) => {
-    const ext = uploadedFile.name.split(".").pop()?.toLowerCase();
+    const ext = uploadedFile.name.split(".").pop()?.toLowerCase() || "";
     if (ext === "pdf") {
       setFileType("pdf");
     } else if (ext === "docx") {
       setFileType("docx");
     } else if (ext === "txt") {
       setFileType("txt");
+    } else if (["png", "jpg", "jpeg", "webp", "gif"].includes(ext)) {
+      setFileType(ext);
     } else {
       setError("unsupported");
       return;
@@ -166,6 +254,7 @@ export default function App() {
       let payload: any = {
         fileName: file ? file.name : "pasted_text.txt",
         fileType: fileType,
+        linkedinUrl: linkedinUrl.trim() || undefined,
       };
 
       if (fileType === "paste") {
@@ -230,6 +319,7 @@ export default function App() {
     setFile(null);
     setFileType("paste");
     setRawText("");
+    setLinkedinUrl("");
     setRoastData(null);
     setError(null);
   };
@@ -328,7 +418,7 @@ export default function App() {
                       : "border-transparent text-white/40 hover:text-white"
                   }`}
                 >
-                  Upload File (PDF, DOCX, TXT)
+                  Upload File (PDF, DOCX, Images)
                 </button>
               </div>
 
@@ -350,7 +440,7 @@ export default function App() {
                     type="file"
                     id="file-upload"
                     className="hidden"
-                    accept=".pdf,.docx,.txt"
+                    accept=".pdf,.docx,.txt,.png,.jpg,.jpeg,.webp,.gif,image/*"
                     onChange={handleFileChange}
                   />
                   <label htmlFor="file-upload" className="cursor-pointer block">
@@ -372,7 +462,7 @@ export default function App() {
                           Drag & Drop Your Resume File
                         </p>
                         <p className="text-xs text-white/40 max-w-sm mx-auto">
-                          Supports PDF, Word (.docx), or Text (.txt) files.
+                          Supports PDF, Word (.docx), Text (.txt), or Images (PNG, JPG, WEBP, GIF).
                         </p>
                         <p className="text-xs text-[#E11D48] font-mono tracking-widest uppercase mt-4">
                           or click to select file
@@ -382,7 +472,7 @@ export default function App() {
                   </label>
                   {error === "unsupported" && (
                     <p className="text-xs text-[#E11D48] mt-3 font-mono font-bold uppercase tracking-wide">
-                      Disaster: Only PDF, DOCX, and TXT files are allowed in this kitchen!
+                      Disaster: Only PDF, DOCX, TXT, and Images (PNG, JPG, WEBP, GIF) are allowed in this kitchen!
                     </p>
                   )}
                 </div>
@@ -408,6 +498,28 @@ export default function App() {
                   />
                 </div>
               )}
+
+              {/* Optional LinkedIn profile URL field */}
+              <div className="mt-6 pt-5 border-t border-white/10 space-y-2">
+                <div className="flex items-center gap-1.5">
+                  <Link className="w-3.5 h-3.5 text-[#E11D48]" />
+                  <span className="text-[10px] font-mono uppercase text-white/50 tracking-widest font-bold">
+                    Supplement with LinkedIn Profile (Optional)
+                  </span>
+                </div>
+                <p className="text-[11px] text-white/40 leading-relaxed">
+                  Provide your public LinkedIn profile URL. The engine will fetch and supplement your resume's work history, adding deep career footprint context to Gordon Ramsay's roast.
+                </p>
+                <div className="relative">
+                  <input
+                    type="url"
+                    value={linkedinUrl}
+                    onChange={(e) => setLinkedinUrl(e.target.value)}
+                    placeholder="https://www.linkedin.com/in/your-profile"
+                    className="w-full bg-[#121212] border border-white/15 px-3 py-2.5 text-xs text-white focus:outline-none focus:border-[#E11D48] transition-all duration-200 placeholder-white/15 font-mono"
+                  />
+                </div>
+              </div>
 
               {/* Submit Buttons */}
               <div className="mt-8 flex flex-col sm:flex-row items-center justify-between gap-4 pt-6 border-t border-white/10">
@@ -1189,20 +1301,34 @@ export default function App() {
 
                       {/* Overhauled Resume Block */}
                       <div className="bg-[#0d0d0d] border border-white/10 rounded-none p-6 relative overflow-hidden">
-                        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-4 border-b border-white/10 pb-3">
-                          <h3 className="text-sm font-black uppercase tracking-widest text-white flex items-center gap-2">
-                            The Complete Overhaul
-                          </h3>
-                          <button
-                            onClick={() => {
-                              const compiled = `SUMMARY:\n${roastData.step10_rewrite.summary}\n\nREWRITTEN EXPERIENCE BULLETS:\n${roastData.step10_rewrite.experienceBulletsRewritten}\n\nSKILLS SUGGESTIONS:\n${roastData.step10_rewrite.skillsReplacement}\n\nTITLE RECOMMENDATIONS:\n${roastData.step10_rewrite.overallTitleRecommendations}`;
-                              handleCopy(compiled, "full-rewrite");
-                            }}
-                            className="text-[10px] uppercase font-bold tracking-wider border border-[#E11D48] bg-[#E11D48] text-black hover:bg-[#ff2f5a] px-4 py-2 flex items-center gap-1.5 transition-colors duration-200 cursor-pointer shrink-0"
-                          >
-                            {copiedStates["full-rewrite"] ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                            {copiedStates["full-rewrite"] ? "Copied Draft!" : "Copy Full Overhaul"}
-                          </button>
+                        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-4 border-b border-white/10 pb-3">
+                          <div>
+                            <h3 className="text-sm font-black uppercase tracking-widest text-white flex items-center gap-2">
+                              The Complete Overhaul
+                            </h3>
+                            <p className="text-xs text-white/40 mt-1 font-serif italic">
+                              Your Michelin-star rewritten assets, ready to be exported.
+                            </p>
+                          </div>
+                          <div className="flex flex-wrap gap-2 shrink-0">
+                            <button
+                              onClick={() => {
+                                const compiled = `SUMMARY:\n${roastData.step10_rewrite.summary}\n\nREWRITTEN EXPERIENCE BULLETS:\n${roastData.step10_rewrite.experienceBulletsRewritten}\n\nSKILLS SUGGESTIONS:\n${roastData.step10_rewrite.skillsReplacement}\n\nTITLE RECOMMENDATIONS:\n${roastData.step10_rewrite.overallTitleRecommendations}`;
+                                handleCopy(compiled, "full-rewrite");
+                              }}
+                              className="text-[10px] uppercase font-bold tracking-wider border border-white/15 text-white hover:bg-white/5 px-4 py-2 flex items-center gap-1.5 transition-colors duration-200 cursor-pointer font-bold"
+                            >
+                              {copiedStates["full-rewrite"] ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                              {copiedStates["full-rewrite"] ? "Copied Draft!" : "Copy Full Overhaul"}
+                            </button>
+                            <button
+                              onClick={() => setShowPdfConfig(true)}
+                              className="text-[10px] uppercase font-bold tracking-wider bg-[#E11D48] text-black hover:bg-[#ff2f5a] px-4 py-2 flex items-center gap-1.5 transition-colors duration-200 cursor-pointer font-black"
+                            >
+                              <FileDown className="w-3.5 h-3.5" />
+                              Export Clean PDF
+                            </button>
+                          </div>
                         </div>
 
                         <div className="space-y-5 text-xs">
@@ -1507,6 +1633,213 @@ export default function App() {
         )}
 
       </main>
+
+      {/* PDF Export Setup Modal */}
+      {showPdfConfig && (
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center z-50 p-4 overflow-y-auto">
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.95 }}
+            className="bg-[#0c0c0c] border border-white/10 w-full max-w-4xl max-h-[90vh] overflow-y-auto p-6 md:p-8 flex flex-col gap-6 text-left shadow-2xl rounded-none"
+          >
+            <div className="flex items-center justify-between border-b border-white/10 pb-4">
+              <div className="flex items-center gap-2">
+                <FileDown className="w-5 h-5 text-[#E11D48]" />
+                <div>
+                  <h3 className="text-sm font-black uppercase tracking-wider text-white">
+                    Export Professional PDF Resume
+                  </h3>
+                  <p className="text-xs text-white/40 mt-1 font-serif italic">
+                    Review and refine your high-impact resume data before generating your custom PDF.
+                  </p>
+                </div>
+              </div>
+              <button 
+                onClick={() => setShowPdfConfig(false)}
+                className="p-1.5 hover:bg-white/5 border border-white/10 text-white/60 hover:text-white transition-colors duration-200 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-5 text-xs">
+              
+              {/* Personal Details */}
+              <div className="space-y-4">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-[#E11D48] border-b border-white/5 pb-1">
+                  1. Contact Information
+                </h4>
+                
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-mono text-white/40 uppercase block">Full Name</label>
+                    <input 
+                      type="text" 
+                      value={pdfContact.name}
+                      onChange={(e) => setPdfContact({ ...pdfContact, name: e.target.value })}
+                      className="w-full bg-[#141414] border border-white/15 px-3 py-2 text-white focus:outline-none focus:border-[#E11D48] font-medium"
+                    />
+                  </div>
+                  
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-mono text-white/40 uppercase block">Target Job Title</label>
+                    <input 
+                      type="text" 
+                      value={pdfContact.title}
+                      onChange={(e) => setPdfContact({ ...pdfContact, title: e.target.value })}
+                      className="w-full bg-[#141414] border border-white/15 px-3 py-2 text-white focus:outline-none focus:border-[#E11D48] font-medium"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-mono text-white/40 uppercase block">Email Address</label>
+                    <input 
+                      type="email" 
+                      value={pdfContact.email}
+                      onChange={(e) => setPdfContact({ ...pdfContact, email: e.target.value })}
+                      className="w-full bg-[#141414] border border-white/15 px-3 py-2 text-white focus:outline-none focus:border-[#E11D48] font-medium"
+                    />
+                  </div>
+                  
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-mono text-white/40 uppercase block">Phone Number</label>
+                    <input 
+                      type="text" 
+                      value={pdfContact.phone}
+                      onChange={(e) => setPdfContact({ ...pdfContact, phone: e.target.value })}
+                      className="w-full bg-[#141414] border border-white/15 px-3 py-2 text-white focus:outline-none focus:border-[#E11D48] font-medium"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <div className="space-y-1 sm:col-span-1">
+                    <label className="text-[10px] font-mono text-white/40 uppercase block">Location</label>
+                    <input 
+                      type="text" 
+                      value={pdfContact.location}
+                      onChange={(e) => setPdfContact({ ...pdfContact, location: e.target.value })}
+                      className="w-full bg-[#141414] border border-white/15 px-3 py-2 text-white focus:outline-none focus:border-[#E11D48] font-medium"
+                    />
+                  </div>
+
+                  <div className="space-y-1 sm:col-span-1">
+                    <label className="text-[10px] font-mono text-white/40 uppercase block">LinkedIn</label>
+                    <input 
+                      type="text" 
+                      value={pdfContact.linkedin}
+                      onChange={(e) => setPdfContact({ ...pdfContact, linkedin: e.target.value })}
+                      className="w-full bg-[#141414] border border-white/15 px-3 py-2 text-white focus:outline-none focus:border-[#E11D48] font-medium"
+                    />
+                  </div>
+
+                  <div className="space-y-1 sm:col-span-1">
+                    <label className="text-[10px] font-mono text-white/40 uppercase block">GitHub</label>
+                    <input 
+                      type="text" 
+                      value={pdfContact.github}
+                      onChange={(e) => setPdfContact({ ...pdfContact, github: e.target.value })}
+                      className="w-full bg-[#141414] border border-white/15 px-3 py-2 text-white focus:outline-none focus:border-[#E11D48] font-medium"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-4 pt-2">
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-[#E11D48] border-b border-white/5 pb-1">
+                    2. Academic & Certifications
+                  </h4>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-mono text-white/40 uppercase block">Education (One per line)</label>
+                    <textarea 
+                      rows={2}
+                      value={pdfContact.education}
+                      onChange={(e) => setPdfContact({ ...pdfContact, education: e.target.value })}
+                      className="w-full bg-[#141414] border border-white/15 px-3 py-2 text-white focus:outline-none focus:border-[#E11D48] font-medium font-serif text-white/80"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-mono text-white/40 uppercase block">Certifications (One per line)</label>
+                    <textarea 
+                      rows={2}
+                      value={pdfContact.certifications}
+                      onChange={(e) => setPdfContact({ ...pdfContact, certifications: e.target.value })}
+                      className="w-full bg-[#141414] border border-white/15 px-3 py-2 text-white focus:outline-none focus:border-[#E11D48] font-medium font-serif text-white/80"
+                    />
+                  </div>
+                </div>
+
+              </div>
+
+              {/* Overhaul Assets */}
+              <div className="space-y-4">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-[#E11D48] border-b border-white/5 pb-1">
+                  3. Overhauled Sections
+                </h4>
+                
+                <div className="space-y-1">
+                  <label className="text-[10px] font-mono text-white/40 uppercase block">Professional Summary Rewrite</label>
+                  <textarea 
+                    rows={4}
+                    value={pdfContact.summary}
+                    onChange={(e) => setPdfContact({ ...pdfContact, summary: e.target.value })}
+                    className="w-full bg-[#141414] border border-white/15 p-3 text-white focus:outline-none focus:border-[#E11D48] font-serif italic leading-relaxed text-white/80"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[10px] font-mono text-white/40 uppercase block">Optimized Skills Replacement</label>
+                  <textarea 
+                    rows={3}
+                    value={pdfContact.skills}
+                    onChange={(e) => setPdfContact({ ...pdfContact, skills: e.target.value })}
+                    className="w-full bg-[#141414] border border-white/15 p-3 text-white focus:outline-none focus:border-[#E11D48] font-serif italic leading-relaxed text-white/80"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[10px] font-mono text-white/40 uppercase block">High-Impact Experience Bullets (One per line)</label>
+                  <textarea 
+                    rows={6}
+                    value={pdfContact.experienceBullets}
+                    onChange={(e) => setPdfContact({ ...pdfContact, experienceBullets: e.target.value })}
+                    className="w-full bg-[#141414] border border-white/15 p-3 text-white focus:outline-none focus:border-[#E11D48] font-serif italic leading-relaxed text-white/80"
+                  />
+                </div>
+
+              </div>
+
+            </div>
+
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between border-t border-white/10 pt-4 gap-4 mt-2">
+              <span className="text-[10px] font-mono text-white/40 uppercase leading-normal">
+                💡 Output matches clean standard HR layouts optimized for ATS parser success.
+              </span>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => setShowPdfConfig(false)}
+                  className="px-5 py-2.5 border border-white/10 hover:bg-white/5 font-bold tracking-wider text-white uppercase text-[10px] transition-colors duration-200 cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => {
+                    exportResumeToPDF(pdfContact);
+                    setShowPdfConfig(false);
+                  }}
+                  className="px-6 py-2.5 bg-[#E11D48] hover:bg-[#ff2f5a] text-black font-black tracking-wider uppercase text-[10px] transition-colors duration-200 cursor-pointer flex items-center gap-2"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  Generate & Download Resume
+                </button>
+              </div>
+            </div>
+
+          </motion.div>
+        </div>
+      )}
     </div>
   );
 }
