@@ -1,0 +1,6 @@
+{
+  "name": "Resume Hell's Kitchen",
+  "description": "Upload or paste your CV to get a brutally honest, hilarious 12-step roast and 5-star rewrite in the signature style of chef Gordon Ramsay.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
